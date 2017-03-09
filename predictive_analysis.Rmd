@@ -1,0 +1,154 @@
+---
+title: "Predictive Analysis - Assignment"
+author: "Stefan Jovanovski"
+date: "March 9, 2017"
+output: html_document
+---
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise
+Dataset).
+
+
+## Exploratory Analysis
+
+**Exploratory Data Analysis** or EDA is an imporant phase in the Data Science pipeline, with a purpose of *exploring the data to examine the structure of the dataset/s, distribution of its variables and their respective relationships*.
+
+Statistitians, since John Tukey - who first championed its usage - have relied on EDA prior to the formal modeling phase because the graphical display of the data enables a fast confirmation or rejection of the underling assumtions, detection of unknown patterns and selection of the appropriate models.
+
+In this specific assignment, given the **limited time to conduct the analysis we will narrow down the exploratory analysis to conducting a fast data audit**. In particular, *we will check the number of NAs in each particular variable, the class of each variable and the repartition of the target variable*.  
+
+
+The first step is to load the neccesary libraries and the provided datasets on Coursera. 
+
+```{r, results = FALSE, cache = TRUE}
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(caret)
+
+#Load datasets 
+#We use the read.csv function, because data.table's fread returns error in subseting later on
+train_data <- read.csv("~/r_directory/pml-training.csv")
+test_data <- read.csv("~/r_directory/pml-testing.csv")
+```
+
+Second, we will check the dimensions of the data (number of rows and columns), the names of the variables and the structure of the dataset. This will give us a better approximation of the datasets content.  
+
+```{r, cache = TRUE}
+#
+dim(train_data)
+
+#First let's see what features we have in the data
+names(train_data)
+
+#Get structure of data
+str(train_data)
+
+```
+
+We can notice that the dataset contains a lot of blank fields and NA values. 
+
+In addition, we should check the variance of the variables. In the caret package, there is a function specifically design for this purpose. 
+
+In addition, we will conduct some further data cleaning and transformation to obtain datasets prepared for modeling. 
+
+```{r, cache = TRUE}
+#Convert fields to appropriate class
+train_data[train_data == " "] <- NA #blank to NA value
+train_data[train_data == "NA"] <- NA #character NA to NA value
+
+#Count NAs per variable and determine Near Zero Variance variables
+na_count <- sapply(train_data, function(n) sum(length(which(is.na(n)))))
+nzv <- nearZeroVar(train_data, saveMetrics = TRUE)
+
+#Remove variables with a high number of NAs and/or near zero-variances
+training_clean <- train_data[, (!nzv$nzv & na_count < 19216)]
+
+#Remove variables which aren't measurements, i.e line number, user name, timestamps, etc.
+training_clean <- training_clean[,-c(1:6)]
+
+#Number of variables in the new dataset
+dim(training_clean)
+```
+
+Finally, we will convert the target variable (named classe) into a factor class. This is the class needed by the algorithms we indent to utilze. For different models, there might be other classes that could be used. 
+
+Furthermore, we will double check for class imbalance. This is an instance in which one class contains significant portion of the examples, and so it leads to a distortion within the prediction. 
+
+```{r, cache = TRUE}
+#Convert class to factor
+training_clean$classe <- as.factor(training_clean$classe)
+
+#Check for balance in classes
+prop.table(table(train_data$classe))
+```
+
+Given that the classes are fairly well balanced, we can proceed with modeling. 
+
+##Data Modeling 
+
+The first step in the modeling phase is to set up the train control argument for cross-validating the training of the model. We use intentionally a low number of rounds and no repeats to reduce the modeling time. For a more efficient model we should play with this argument.  
+
+```{r, cache = TRUE}
+trControl <- caret::trainControl( method = "repeatedcv", number = 3, 
+                                  verboseIter = TRUE)
+```
+
+Secondly, we will split the training set into training, validation and test sets. This will enable us to train the model solely on the training data, without overfitting the model. 
+
+```{r, cache = TRUE}
+inTrain <- createDataPartition(training_clean$classe, p = 0.7)[[1]]
+training <- training_clean[inTrain, ]
+rest <- training_clean[ -inTrain, ]
+
+# Split training dataset into 50% testing set and 50% validation set
+inTesting <- createDataPartition(rest$classe, p = 0.5)[[1]]
+testing <- rest[inTesting, ]
+validation <- rest[ -inTesting, ]
+
+formulaTrees <- classe ~ .
+```
+
+Third, we will train multiple models on the datasets. 
+
+```{r, cache = TRUE}
+set.seed(123) #enables reproducability
+
+fitRF <- train(formulaTrees, data = training, trControl = trControl, method = "rf") #Random Forest
+fitXGB <- train(formulaTrees, data = training, trControl = trControl, method = "xgbTree") #XG Boost
+fitKNN <- train(formulaTrees, data = training, trControl = trControl, method = "knn") #K-Nearest Neighbours
+fitRpart <- train(formulaTrees, data = training, trControl = trControl, method = "rpart")
+fitLDA <- train(formulaTrees, data = training, trControl = trControl, method = "lda")
+fitSVM <- train(formulaTrees, data = training, trControl = trControl, method = "svmRadial" )
+```
+
+Once we have trained multiple models, we will calculate and compare their preformance. 
+
+```{r, cache = TRUE}
+results <- resamples(list(xgb = fitXGB, rf = fitRF, knearest = fitKNN, svm = fitSVM, rpart = fitRpart, lda = fitLDA))
+bwplot(results, metric = "Accuracy", main = "Algo comparison")
+```
+
+We see that XGBoost has the best preformance on the training data. So, we will use this model for the final prediction. 
+
+```{r, cache = TRUE}
+predAssignment <- predict(fitXGB, newdata = test_data)
+
+#The predicted classes are:
+predAssignment
+```
+
+##Model improvement
+
+The purpose of this analysis was to demonstrate the power of R as a programming language to construct Machine Learning models in a fast manner. 
+
+Having said that, we should note that there are multiple steps that can be undertaken to improve the model. 
+- Data Cleaning (imputing missing values)
+- Better exploratory analysis
+- Feature Engineering
+- Model fine-tuning
+- Ensamble of models
+
+However, despite the limitations of this analysis, we can also note that we can obtained a very high accuracy even with this basic model. 
